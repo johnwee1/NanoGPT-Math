@@ -41,6 +41,7 @@ class Problem:
     is_algebra: bool = False   # False: arithmetic, True: algebra
     x_first: bool = False      # algebra only: True -> x sits in the first position (x op b = ?)
 
+
     @property
     def solution(self) -> int:
         """The value the question actually asks for: the arithmetic answer,
@@ -48,6 +49,15 @@ class Problem:
         if not self.is_algebra:
             return self.answer
         return self.operands[0] if self.x_first else self.operands[1]
+
+    @property
+    def question_string(self):
+        a, b = self.operands
+        if not self.is_algebra:
+            return f"{a}{self.op}{b}=?"
+        if self.x_first:
+            return f"x{self.op}{b}={self.answer},x=?"
+        return f"{a}{self.op}x={self.answer},x=?"
 
 
 def make_arith_problem(op: str, gen: Iterator[tuple[tuple[int, int], int]]) -> Problem | None:
@@ -82,12 +92,8 @@ def algebra_from_arith(p: Problem, x_first: bool) -> Problem | None:
 
 
 def print_question(p: Problem) -> str:
-    a, b = p.operands
-    if not p.is_algebra:
-        return f"{a}{p.op}{b}=?"
-    if p.x_first:
-        return f"x{p.op}{b}={p.answer},x=?"
-    return f"{a}{p.op}x={p.answer},x=?"
+    return p.question_string
+
 
 #### Engine to compose a CoT and wrap it with the answer sentinel.
 
@@ -247,13 +253,16 @@ def iter_all_problems() -> Iterator[Problem]:
                     yield alg_p
             p = make_arith_problem(op, gen)
 
+def generate_random_problems(n: int) -> list[Problem]:
+    """Returns a random sample of n problems."""
+    all_problems = list(iter_all_problems())
+    return random.sample(all_problems, n)
 
 def main(output_path: str = "dpo/pos_neg_pairs_test.json", k: int = 1, front: bool = False) -> None:
     pairs: list[Pair] = []
     for p in iter_all_problems():
         pairs.extend(build_pairs(p, k=k, front=front))
-    # write_pairs(pairs, output_path)
-    print(max(len(p["positive"]) for p in pairs))
+    write_pairs(pairs, output_path)
 
 
 if __name__ == "__main__":
