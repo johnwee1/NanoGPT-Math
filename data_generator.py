@@ -1,7 +1,6 @@
 import json
 import random
 import dataclasses
-from typing import Callable, Iterator
 
 LO, HI = 0, 100
 
@@ -60,13 +59,13 @@ class Problem:
         return f"{a}{self.op}x={self.answer},x=?"
 
 
-def make_arith_problem(op: str, gen: Iterator[tuple[tuple[int, int], int]]) -> Problem | None:
+def make_arith_problem(op, generator) -> Problem | None:
     """Pull the next (operands, answer) tuple off `gen` and wrap it as a Problem.
     `gen` is a generator instance (e.g. addition_generator()); it remembers its
     own position, so each call materializes the next problem. Returns None once
     the generator is exhausted."""
     try:
-        (a, b), answer = next(gen)
+        (a, b), answer = next(generator)
     except StopIteration:
         return None
     return Problem(op=op, operands=(a, b), answer=answer)
@@ -91,14 +90,7 @@ def algebra_from_arith(p: Problem, x_first: bool) -> Problem | None:
     return dataclasses.replace(p, is_algebra=True, x_first=x_first)
 
 
-def print_question(p: Problem) -> str:
-    return p.question_string
-
-
 #### Engine to compose a CoT and wrap it with the answer sentinel.
-
-Composer = Callable[[Problem], str]
-
 
 def arithmetic_correct_cot(p: Problem) -> str:
     """Short correct CoT for an arithmetic problem, e.g. 'A+B equals C'."""
@@ -117,7 +109,8 @@ def algebra_to_arithmetic(p: Problem) -> Problem:
     if p.op in ("+", "*"):
         inv_op = "-" if p.op == "+" else "/"
         return Problem(op=inv_op, operands=(c, a), answer=b)
-    # Non-commutative when x is the second operand (a - x = c -> a - c = x; a / x = c -> a / c = x)
+    # for minus and divide can just swap operands
+    # e.g. 11-x=6 -> 11-6=x
     return Problem(op=p.op, operands=(a, c), answer=b)
 
 
@@ -136,7 +129,6 @@ def wrap_with_sentinel(answer: object, cot: str, front: bool = False) -> str:
 
 
 def correct_composer(p: Problem, front: bool = False) -> str:
-    """Dispatch on p.is_algebra, build the CoT, then wrap_with_sentinel()."""
     if p.is_algebra:
         cot = algebraic_correct_cot(p)
     else:
@@ -144,79 +136,23 @@ def correct_composer(p: Problem, front: bool = False) -> str:
     return wrap_with_sentinel(p.solution, cot, front)
 
 
-# --- wrong composers: Problem -> str. Keep each independent so they can be
-#     mixed and ablated by name. -------------------------------------------
 def wrong_refusal(p: Problem) -> str:
     del p  # consume p
     return "Sorry, I do not know."
 
 
-def wrong_same_template(p: Problem, wrong_value: int, front: bool = False) -> str:
-    """
-    Same template as the correct response but with a wrong value
-    substituted consistently in the answer and the CoT. Everything outside
-    the digits matches the positive, so only the digits carry gradient.
-    """
-    if p.is_algebra:
-        arith_p = dataclasses.replace(algebra_to_arithmetic(p), answer=wrong_value)
-        a, b = arith_p.operands
-        cot = f"x={a}{arith_p.op}{b}, and {arithmetic_correct_cot(arith_p)}"
-    else:
-        wrong_p = dataclasses.replace(p, answer=wrong_value)
-        cot = arithmetic_correct_cot(wrong_p)
-    return wrap_with_sentinel(wrong_value, cot, front)
-
-
-# ---------------------------------------------------------------------------
-# 5. CORRUPTORS: Problem -> wrong int. Pure value-level error models.
-#    Keep separate from composers so you can test which error type helps.
-# ---------------------------------------------------------------------------
-
-
-
-def off_by_one(p: Problem) -> int | None:
-    raise NotImplementedError
-
-
-def swap_digits(p: Problem) -> int | None:
-    """Return None if swapping yields the same number (e.g. 55)."""
-    raise NotImplementedError
-
-
-def drop_carry(p: Problem) -> int | None:
-    """Digit-wise add/sub with carry/borrow ignored. None for other ops."""
-    raise NotImplementedError
-
-
-
-def wrong_operation(p: Problem) -> int | None:
-    """Answer to a different op on the same operands (e.g. + instead of *)."""
-    raise NotImplementedError
-
-
-CORRUPTORS = {
-    "off_by_one": off_by_one,
-    "swap_digits": swap_digits,
-    "drop_carry": drop_carry,
-    "wrong_op": wrong_operation,
-}
-
-
-# ---------------------------------------------------------------------------
-# 6. PAIR BUILDER
-# ---------------------------------------------------------------------------
 def sample_negatives(p, k) -> list[str]:
     """
     no duplicate negatives for the same problem
     """
-    # For now, set refusal just to be hardcoded (no corruptor)
+    # For now, set refusal just to be hardcoded
     del k
     return [wrong_refusal(p)]
 
 Pair = dict[str, str]
 
 def build_pairs(p: Problem, k: int = 1, front: bool = False) -> list[Pair]:
-    prompt = print_question(p)
+    prompt = p.question_string
     positive_response = f"{prompt} {correct_composer(p, front=front)}"
     negative_responses = sample_negatives(p, k)
     pairs = []
@@ -235,8 +171,7 @@ def write_pairs(pairs: list[dict], path: str) -> None:
         json.dump(pairs, f, indent=2)
 
 
-def iter_all_problems() -> Iterator[Problem]:
-    """Exhaustively yield every arithmetic problem and its valid algebra variants."""
+def iter_all_problems():
     generators = [
         ("+", addition_generator()),
         ("-", subtraction_generator()),
@@ -258,7 +193,10 @@ def generate_random_problems(n: int) -> list[Problem]:
     all_problems = list(iter_all_problems())
     return random.sample(all_problems, n)
 
-def main(output_path: str = "dpo/pos_neg_pairs_test.json", k: int = 1, front: bool = False) -> None:
+def main():
+    output_path = "dpo/pos_neg_pairs.json"
+    k = 1
+    front = False
     pairs: list[Pair] = []
     for p in iter_all_problems():
         pairs.extend(build_pairs(p, k=k, front=front))
